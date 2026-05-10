@@ -85,17 +85,17 @@ return {
 }
 `
 
-// RedisStore implements the Store interface using Redis as the backend.
+// redisStore implements the Store interface using Redis as the backend.
 // It utilizes Lua scripts to guarantee atomicity of rate limit evaluations.
-type RedisStore struct {
+type redisStore struct {
 	client *redis.Client
 	script *redis.Script
 }
 
-// NewRedisStore creates a new RedisStore with the given Redis client.
+// NewRedisStore creates a new redisStore with the given Redis client.
 // It initializes the Lua script that will be used for atomic rate limit operations.
-func NewRedisStore(client *redis.Client) *RedisStore {
-	return &RedisStore{
+func NewRedisStore(client *redis.Client) Store {
+	return &redisStore{
 		client: client,
 		script: redis.NewScript(rateLimitScript),
 	}
@@ -104,7 +104,7 @@ func NewRedisStore(client *redis.Client) *RedisStore {
 // Allow checks if a request is allowed based on the rate limit.
 // It executes the rate limit Lua script on the Redis server to atomically deduct the cost
 // and return the current state of the bucket.
-func (r *RedisStore) Allow(ctx context.Context, key string, cost, maxToken int64, refillInterval time.Duration) (allow bool, remaining int64, retryAfter time.Duration, err error) {
+func (r *redisStore) Allow(ctx context.Context, key string, cost, maxToken int64, refillInterval time.Duration) (allow bool, remaining int64, retryAfter time.Duration, err error) {
 	keys := []string{key}
 	
 	args := []interface{}{

@@ -12,7 +12,7 @@ import (
 
 // newTestRedisStore spins up a fresh miniredis instance and returns
 // the RedisStore alongside the miniredis server for time manipulation.
-func newTestRedisStore(t *testing.T) (*RedisStore, *miniredis.Miniredis) {
+func newTestRedisStore(t *testing.T) (*redisStore, *miniredis.Miniredis) {
 	t.Helper()
 
 	mr := miniredis.RunT(t) // auto-closed when t finishes
@@ -21,7 +21,9 @@ func newTestRedisStore(t *testing.T) (*RedisStore, *miniredis.Miniredis) {
 		Addr: mr.Addr(),
 	})
 
-	store := NewRedisStore(client)
+	storeI := NewRedisStore(client)
+
+	store := storeI.(*redisStore)
 
 	return store, mr
 }
