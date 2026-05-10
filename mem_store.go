@@ -22,10 +22,15 @@ type memoryStore struct {
 }
 
 // NewMemoryStore creates a new instance of memoryStore and starts a janitor goroutine.
-func NewMemoryStore() Store {
+func NewMemoryStore(stalePeriod time.Duration) Store {
+
+	if stalePeriod == 0 {
+		stalePeriod = defaultStalePeriod
+	}
+
 	m := &memoryStore{
 		buckets:     make(map[string]*bucket),
-		stalePeriod: defaultStalePeriod,
+		stalePeriod: stalePeriod,
 	}
 
 	// Start the background goroutine to clean up unused buckets
