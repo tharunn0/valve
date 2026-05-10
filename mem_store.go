@@ -14,15 +14,22 @@ type bucket struct {
 
 // memoryStore is an in-memory implementation of the Store interface.
 type memoryStore struct {
-	mu      sync.Mutex
-	buckets map[string]*bucket
+	mu          sync.Mutex
+	buckets     map[string]*bucket
+	stalePeriod time.Duration
 }
 
-// NewMemoryStore creates a new instance of memoryStore.
-func NewMemoryStore() Store {
-	return &memoryStore{
-		buckets: make(map[string]*bucket),
+// NewMemoryStore creates a new instance of memoryStore and starts a janitor goroutine.
+func NewMemoryStore(stalePeriod time.Duration) Store {
+	m := &memoryStore{
+		buckets:     make(map[string]*bucket),
+		stalePeriod: stalePeriod,
 	}
+
+	// Start the background goroutine to clean up unused buckets
+	go m.janitor()
+
+	return m
 }
 
 // Allow checks if a request is permitted for the given key using a token bucket algorithm.
@@ -71,4 +78,21 @@ func (m *memoryStore) Allow(ctx context.Context, key string, cost, maxToken int6
 	retryAfter = time.Duration(needed) * refillInterval
 
 	return false, b.tokens, retryAfter, nil
+}
+
+// janitor runs in a background goroutine to periodically clean up stale buckets.
+func (m *memoryStore) janitor() {
+	// The janitor runs every (half the stalePeriod)
+	ticker := time.NewTicker(m.stalePeriod / 2)
+
+	for range ticker.C {
+		m.mu.Lock()
+		now := time.Now()
+		for key, b := range m.buckets {
+			if now.Sub(b.lastRefill) >= m.stalePeriod {
+				delete(m.buckets, key)
+			}
+		}
+		m.mu.Unlock()
+	}
 }
