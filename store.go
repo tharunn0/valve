@@ -9,7 +9,7 @@ import (
 type Store interface {
 	// Allow checks if a request is allowed based on the rate limit.
 	// It deducts the specified cost from the bucket associated with the key.
-	// 
+	//
 	// Parameters:
 	// - ctx: The context for the request.
 	// - key: A unique identifier for the rate limit bucket.
@@ -22,5 +22,5 @@ type Store interface {
 	// - remaining: The number of tokens remaining in the bucket.
 	// - retryAfter: The time duration to wait before a new request is allowed.
 	// - err: Any error that occurred during the check.
-	Allow(ctx context.Context, key string, cost, maxToken int, refillInterval time.Duration) (allow bool, remaining int, retryAfter time.Duration, err error)
+	Allow(ctx context.Context, key string, cost, maxToken int64, refillInterval time.Duration) (allow bool, remaining int64, retryAfter time.Duration, err error)
 }
