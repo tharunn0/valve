@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const defaultStalePeriod = 1 * time.Hour
+
 // bucket holds the state for a single rate-limited key.
 type bucket struct {
 	tokens     int64
@@ -20,10 +22,10 @@ type memoryStore struct {
 }
 
 // NewMemoryStore creates a new instance of memoryStore and starts a janitor goroutine.
-func NewMemoryStore(stalePeriod time.Duration) Store {
+func NewMemoryStore() Store {
 	m := &memoryStore{
 		buckets:     make(map[string]*bucket),
-		stalePeriod: stalePeriod,
+		stalePeriod: defaultStalePeriod,
 	}
 
 	// Start the background goroutine to clean up unused buckets
