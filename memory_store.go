@@ -14,23 +14,20 @@ type bucket struct {
 	lastRefill time.Time
 }
 
-// memoryStore is an in-memory implementation of the Store interface.
-type memoryStore struct {
-	mu          sync.Mutex
+// memoryTokenBucket is an in-memory implementation of the Backend interface.
+type memoryTokenBucket struct {
+	mu sync.Mutex
+
 	buckets     map[string]*bucket
 	stalePeriod time.Duration
 }
 
-// NewMemoryStore creates a new instance of memoryStore and starts a janitor goroutine.
-func NewMemoryStore(stalePeriod time.Duration) Store {
+// NewMemoryTokenBucket creates a new instance of memoryTokenBucket and starts a janitor goroutine.
+func NewMemoryTokenBucket() Backend {
 
-	if stalePeriod == 0 {
-		stalePeriod = defaultStalePeriod
-	}
-
-	m := &memoryStore{
+	m := &memoryTokenBucket{
 		buckets:     make(map[string]*bucket),
-		stalePeriod: stalePeriod,
+		stalePeriod: defaultStalePeriod,
 	}
 
 	// Start the background goroutine to clean up unused buckets
@@ -40,7 +37,7 @@ func NewMemoryStore(stalePeriod time.Duration) Store {
 }
 
 // Allow checks if a request is permitted for the given key using a token bucket algorithm.
-func (m *memoryStore) Allow(ctx context.Context, key string, cost, maxToken int64, refillInterval time.Duration) (allow bool, remaining int64, retryAfter time.Duration, err error) {
+func (m *memoryTokenBucket) Allow(ctx context.Context, key string, cost, maxToken int64, refillInterval time.Duration) (*Result, error) {
 	// Lock the store to ensure thread-safety for map access and bucket updates.
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -77,18 +74,28 @@ func (m *memoryStore) Allow(ctx context.Context, key string, cost, maxToken int6
 	// Check if the bucket has enough tokens for the requested cost.
 	if b.tokens >= cost {
 		b.tokens -= cost
-		return true, b.tokens, 0, nil
+		return &Result{
+			Allow:      true,
+			Remaining:  b.tokens,
+			RetryAfter: 0,
+		}, nil
 	}
 
 	// If not enough tokens, calculate the duration until enough tokens are refilled.
 	needed := cost - b.tokens
-	retryAfter = time.Duration(needed) * refillInterval
+	retryAfter := time.Duration(needed) * refillInterval
 
-	return false, b.tokens, retryAfter, nil
+	res := &Result{
+		Allow:      false,
+		Remaining:  b.tokens,
+		RetryAfter: retryAfter,
+	}
+
+	return res, nil
 }
 
 // janitor runs in a background goroutine to periodically clean up stale buckets.
-func (m *memoryStore) janitor() {
+func (m *memoryTokenBucket) janitor() {
 	// The janitor runs every (half the stalePeriod)
 	ticker := time.NewTicker(m.stalePeriod / 2)
 

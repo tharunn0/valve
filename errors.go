@@ -3,8 +3,8 @@ package valve
 import "errors"
 
 var (
-	// ErrStoreRequired is returned when a Limiter is created without a Store.
-	ErrStoreRequired = errors.New("valve: store is required")
+	// ErrBackendRequired is returned when a Limiter is created without a Backend.
+	ErrBackendRequired = errors.New("valve: backend is required")
 
 	// ErrInvalidRate is returned when the rate is less than or equal to zero.
 	ErrInvalidRate = errors.New("valve: rate must be greater than zero")

@@ -85,7 +85,7 @@ return {
 }
 `
 
-// redisTokenBucket implements the Store interface using Redis as the backend.
+// redisTokenBucket implements the Backend interface using Redis as the backend.
 // It utilizes Lua scripts to guarantee atomicity of rate limit evaluations.
 type redisTokenBucket struct {
 	client         *redis.Client
@@ -97,7 +97,7 @@ type redisTokenBucket struct {
 
 // NewRedisTokenBucket creates a new redisTokenBucket with the given Redis client.
 // It initializes the Lua script that will be used for atomic rate limit operations.
-func NewRedisTokenBucket(client *redis.Client, rate uint32, maxTokens uint32, refillInterval time.Duration) Store {
+func NewRedisTokenBucket(client *redis.Client, rate uint32, maxTokens uint32, refillInterval time.Duration) Backend {
 	return &redisTokenBucket{
 		client:         client,
 		rate:           rate,
@@ -110,7 +110,7 @@ func NewRedisTokenBucket(client *redis.Client, rate uint32, maxTokens uint32, re
 // Allow checks if a request is allowed based on the rate limit.
 // It executes the rate limit Lua script on the Redis server to atomically deduct the cost
 // and return the current state of the bucket.
-func (r *redisTokenBucket) Allow(ctx context.Context, key string, cost, maxToken int64, refillInterval time.Duration) (allow bool, remaining int64, retryAfter time.Duration, err error) {
+func (r *redisTokenBucket) Allow(ctx context.Context, key string, cost, maxToken int64, refillInterval time.Duration) (*Result, error) {
 	keys := []string{key}
 
 	args := []any{
@@ -119,29 +119,33 @@ func (r *redisTokenBucket) Allow(ctx context.Context, key string, cost, maxToken
 		r.refillInterval.Milliseconds(),
 	}
 
+	res := &Result{}
+
 	// Execute the pre-loaded Lua script.
 	result, err := r.script.Run(ctx, r.client, keys, args...).Result()
 	if err != nil {
-		return false, 0, 0, fmt.Errorf("failed to execute rate limit script: %w", err)
+		res.Allow = false
+		return res, fmt.Errorf("failed to execute rate limit script: %w", err)
 	}
 
 	// Parse the results from the Lua script and extract the values.
-	res, ok := result.([]any)
-	if !ok || len(res) < 3 {
-		return false, 0, 0, fmt.Errorf("unexpected lua script result format")
+	resList, ok := result.([]any)
+	if !ok || len(resList) < 3 {
+		res.Allow = false
+		return res, fmt.Errorf("unexpected lua script result format")
 	}
 
-	if allowInt, ok := res[0].(int64); ok && allowInt == 1 {
-		allow = true
+	if allowInt, ok := resList[0].(int64); ok && allowInt == 1 {
+		res.Allow = true
 	}
 
-	if rem, ok := res[1].(int64); ok {
-		remaining = rem
+	if rem, ok := resList[1].(int64); ok {
+		res.Remaining = rem
 	}
 
-	if retryMs, ok := res[2].(int64); ok {
-		retryAfter = time.Duration(retryMs) * time.Millisecond
+	if retryMs, ok := resList[2].(int64); ok {
+		res.RetryAfter = time.Duration(retryMs) * time.Millisecond
 	}
 
-	return allow, remaining, retryAfter, nil
+	return res, nil
 }

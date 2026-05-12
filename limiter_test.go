@@ -7,7 +7,7 @@ import (
 )
 
 func TestNewLimiter(t *testing.T) {
-	store := NewMemoryStore(0)
+	backend := NewMemoryTokenBucket()
 
 	tests := []struct {
 		name    string
@@ -17,7 +17,7 @@ func TestNewLimiter(t *testing.T) {
 		{
 			name: "valid options",
 			opts: []Option{
-				WithStore(store),
+				WithBackend(backend),
 				WithRate(5),
 				WithMaxTokens(10),
 				WithRefillInterval(time.Second),
@@ -25,29 +25,29 @@ func TestNewLimiter(t *testing.T) {
 			wantErr: nil,
 		},
 		{
-			name:    "missing store",
+			name:    "missing backend",
 			opts:    []Option{WithRate(5)},
-			wantErr: ErrStoreRequired,
+			wantErr: ErrBackendRequired,
 		},
 		{
 			name:    "invalid rate",
-			opts:    []Option{WithStore(store), WithRate(0)},
+			opts:    []Option{WithBackend(backend), WithRate(0)},
 			wantErr: ErrInvalidRate,
 		},
 		{
 			name:    "invalid max tokens",
-			opts:    []Option{WithStore(store), WithMaxTokens(-1)},
+			opts:    []Option{WithBackend(backend), WithMaxTokens(-1)},
 			wantErr: ErrInvalidMaxTokens,
 		},
 		{
 			name:    "invalid refill interval",
-			opts:    []Option{WithStore(store), WithRefillInterval(0)},
+			opts:    []Option{WithBackend(backend), WithRefillInterval(0)},
 			wantErr: ErrInvalidRefillInterval,
 		},
 		{
 			name: "rate too high",
 			opts: []Option{
-				WithStore(store),
+				WithBackend(backend),
 				WithRate(2),
 				WithRefillInterval(1 * time.Nanosecond),
 			},
@@ -66,9 +66,9 @@ func TestNewLimiter(t *testing.T) {
 }
 
 func TestLimiter_Allow(t *testing.T) {
-	store := NewMemoryStore(0)
+	backend := NewMemoryTokenBucket()
 	limiter, _ := NewLimiter(
-		WithStore(store),
+		WithBackend(backend),
 		WithRate(5), // 5 tokens per second => 200ms per token
 		WithMaxTokens(10),
 		WithRefillInterval(time.Second),
@@ -95,18 +95,18 @@ func TestLimiter_Allow(t *testing.T) {
 	}
 
 	// 11th request should be denied
-	allow, remaining, retryAfter, err := limiter.AllowContext(ctx, key, 1)
+	res, err := limiter.AllowContext(ctx, key, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if allow {
+	if res.Allow {
 		t.Fatal("expected request to be denied")
 	}
-	if remaining != 0 {
-		t.Fatalf("expected remaining 0, got %d", remaining)
+	if res.Remaining != 0 {
+		t.Fatalf("expected remaining 0, got %d", res.Remaining)
 	}
 	// Since 1 token refilled every 200ms, retryAfter should be 200ms
-	if retryAfter != 200*time.Millisecond {
-		t.Fatalf("expected retryAfter 200ms, got %v", retryAfter)
+	if res.RetryAfter != 200*time.Millisecond {
+		t.Fatalf("expected retryAfter 200ms, got %v", res.RetryAfter)
 	}
 }
