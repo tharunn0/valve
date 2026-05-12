@@ -85,32 +85,38 @@ return {
 }
 `
 
-// redisStore implements the Store interface using Redis as the backend.
+// redisTokenBucket implements the Store interface using Redis as the backend.
 // It utilizes Lua scripts to guarantee atomicity of rate limit evaluations.
-type redisStore struct {
-	client *redis.Client
-	script *redis.Script
+type redisTokenBucket struct {
+	client         *redis.Client
+	rate           uint32
+	maxTokens      uint32
+	refillInterval time.Duration
+	script         *redis.Script
 }
 
-// NewRedisStore creates a new redisStore with the given Redis client.
+// NewRedisTokenBucket creates a new redisTokenBucket with the given Redis client.
 // It initializes the Lua script that will be used for atomic rate limit operations.
-func NewRedisStore(client *redis.Client) Store {
-	return &redisStore{
-		client: client,
-		script: redis.NewScript(rateLimitScript),
+func NewRedisTokenBucket(client *redis.Client, rate uint32, maxTokens uint32, refillInterval time.Duration) Store {
+	return &redisTokenBucket{
+		client:         client,
+		rate:           rate,
+		maxTokens:      maxTokens,
+		refillInterval: refillInterval,
+		script:         redis.NewScript(rateLimitScript),
 	}
 }
 
 // Allow checks if a request is allowed based on the rate limit.
 // It executes the rate limit Lua script on the Redis server to atomically deduct the cost
 // and return the current state of the bucket.
-func (r *redisStore) Allow(ctx context.Context, key string, cost, maxToken int64, refillInterval time.Duration) (allow bool, remaining int64, retryAfter time.Duration, err error) {
+func (r *redisTokenBucket) Allow(ctx context.Context, key string, cost, maxToken int64, refillInterval time.Duration) (allow bool, remaining int64, retryAfter time.Duration, err error) {
 	keys := []string{key}
 
 	args := []any{
 		cost,
-		maxToken,
-		refillInterval.Milliseconds(),
+		r.maxTokens,
+		r.refillInterval.Milliseconds(),
 	}
 
 	// Execute the pre-loaded Lua script.

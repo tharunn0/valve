@@ -10,9 +10,9 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// newTestRedisStore spins up a fresh miniredis instance and returns
-// the RedisStore alongside the miniredis server for time manipulation.
-func newTestRedisStore(t *testing.T) (*redisStore, *miniredis.Miniredis) {
+// newTestRedisTokenBucket spins up a fresh miniredis instance and returns
+// the RedisTokenBucket alongside the miniredis server for time manipulation.
+func newTestRedisTokenBucket(t *testing.T, maxTokens uint32, refillInterval time.Duration) (*redisTokenBucket, *miniredis.Miniredis) {
 	t.Helper()
 
 	mr := miniredis.RunT(t) // auto-closed when t finishes
@@ -21,20 +21,20 @@ func newTestRedisStore(t *testing.T) (*redisStore, *miniredis.Miniredis) {
 		Addr: mr.Addr(),
 	})
 
-	storeI := NewRedisStore(client)
+	storeI := NewRedisTokenBucket(client, maxTokens, maxTokens, refillInterval)
 
-	store := storeI.(*redisStore)
+	store := storeI.(*redisTokenBucket)
 
 	return store, mr
 }
 
 // --- Constructor ---
 
-func TestNewRedisStore_ReturnsNonNil(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+func TestNewRedisTokenBucket_ReturnsNonNil(t *testing.T) {
+	store, _ := newTestRedisTokenBucket(t, 10, time.Second)
 
 	if store == nil {
-		t.Fatal("expected non-nil RedisStore")
+		t.Fatal("expected non-nil RedisTokenBucket")
 	}
 	if store.client == nil {
 		t.Fatal("expected non-nil Redis client in store")
@@ -47,7 +47,7 @@ func TestNewRedisStore_ReturnsNonNil(t *testing.T) {
 // --- Basic Allow Behavior ---
 
 func TestRedisAllow_FirstRequestAllowed(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 10, time.Second)
 
 	allow, remaining, retryAfter, err := store.Allow(context.Background(), "key1", 1, 10, time.Second)
 
@@ -66,7 +66,7 @@ func TestRedisAllow_FirstRequestAllowed(t *testing.T) {
 }
 
 func TestRedisAllow_ExhaustAllTokens(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 5, time.Second)
 	ctx := context.Background()
 
 	// Consume all 5 tokens one by one.
@@ -101,7 +101,7 @@ func TestRedisAllow_ExhaustAllTokens(t *testing.T) {
 }
 
 func TestRedisAllow_CostGreaterThanOne(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 10, time.Second)
 	ctx := context.Background()
 
 	// Request with cost 3 from a bucket of 10.
@@ -118,7 +118,7 @@ func TestRedisAllow_CostGreaterThanOne(t *testing.T) {
 }
 
 func TestRedisAllow_CostExceedsAvailableTokens(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 10, time.Second)
 	ctx := context.Background()
 
 	// Consume 8 of 10 tokens.
@@ -141,7 +141,7 @@ func TestRedisAllow_CostExceedsAvailableTokens(t *testing.T) {
 }
 
 func TestRedisAllow_CostEqualToMaxTokens(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 10, time.Second)
 	ctx := context.Background()
 
 	// A single request that costs exactly the full bucket.
@@ -164,7 +164,7 @@ func TestRedisAllow_CostEqualToMaxTokens(t *testing.T) {
 }
 
 func TestRedisAllow_CostExceedsMaxTokens(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 10, time.Second)
 	ctx := context.Background()
 
 	// A request whose cost is larger than the bucket can ever hold.
@@ -186,7 +186,7 @@ func TestRedisAllow_CostExceedsMaxTokens(t *testing.T) {
 // --- Token Refill Behavior ---
 
 func TestRedisAllow_TokenRefillAfterWait(t *testing.T) {
-	store, mr := newTestRedisStore(t)
+	store, mr := newTestRedisTokenBucket(t, 5, time.Second)
 	ctx := context.Background()
 
 	// Pin the start time so TIME calls in the Lua script are deterministic.
@@ -214,7 +214,7 @@ func TestRedisAllow_TokenRefillAfterWait(t *testing.T) {
 }
 
 func TestRedisAllow_RefillCapsAtMaxTokens(t *testing.T) {
-	store, mr := newTestRedisStore(t)
+	store, mr := newTestRedisTokenBucket(t, 5, time.Second)
 	ctx := context.Background()
 
 	now := time.Now()
@@ -241,7 +241,7 @@ func TestRedisAllow_RefillCapsAtMaxTokens(t *testing.T) {
 }
 
 func TestRedisAllow_PartialRefillNotEnough(t *testing.T) {
-	store, mr := newTestRedisStore(t)
+	store, mr := newTestRedisTokenBucket(t, 5, 10*time.Second)
 	ctx := context.Background()
 
 	now := time.Now()
@@ -269,7 +269,7 @@ func TestRedisAllow_PartialRefillNotEnough(t *testing.T) {
 // --- Key Isolation ---
 
 func TestRedisAllow_DifferentKeysAreIsolated(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 5, time.Second)
 	ctx := context.Background()
 
 	// Exhaust key1.
@@ -289,7 +289,7 @@ func TestRedisAllow_DifferentKeysAreIsolated(t *testing.T) {
 }
 
 func TestRedisAllow_ManyKeysIndependent(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 3, time.Second)
 	ctx := context.Background()
 
 	keys := []string{"user:alpha", "user:bravo", "user:charlie"}
@@ -311,7 +311,7 @@ func TestRedisAllow_ManyKeysIndependent(t *testing.T) {
 // --- Concurrency ---
 
 func TestRedisAllow_ConcurrentAccess(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 50, time.Hour)
 	ctx := context.Background()
 
 	var (
@@ -358,7 +358,7 @@ func TestRedisAllow_ConcurrentAccess(t *testing.T) {
 }
 
 func TestRedisAllow_ConcurrentDifferentKeys(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 10, time.Hour)
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
@@ -396,7 +396,7 @@ func TestRedisAllow_ConcurrentDifferentKeys(t *testing.T) {
 // --- Edge Cases ---
 
 func TestRedisAllow_ZeroCost(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 10, time.Second)
 	ctx := context.Background()
 
 	allow, remaining, retryAfter, err := store.Allow(ctx, "key1", 0, 10, time.Second)
@@ -415,7 +415,7 @@ func TestRedisAllow_ZeroCost(t *testing.T) {
 }
 
 func TestRedisAllow_MaxTokenOfOne(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 1, time.Second)
 	ctx := context.Background()
 
 	// First request allowed.
@@ -438,7 +438,7 @@ func TestRedisAllow_MaxTokenOfOne(t *testing.T) {
 }
 
 func TestRedisAllow_MultipleRapidRequests(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 100, time.Hour)
 	ctx := context.Background()
 
 	// Use a very large refillInterval so miniredis TIME differences between
@@ -467,7 +467,7 @@ func TestRedisAllow_MultipleRapidRequests(t *testing.T) {
 }
 
 func TestRedisAllow_LargeRefillInterval(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 5, time.Hour)
 	ctx := context.Background()
 
 	// Use all tokens with a very long refill.
@@ -491,7 +491,7 @@ func TestRedisAllow_FailsOnClosedConnection(t *testing.T) {
 		Addr: mr.Addr(),
 	})
 
-	store := NewRedisStore(client)
+	store := NewRedisTokenBucket(client, 10, 100, time.Second)
 
 	// Close the miniredis server to simulate a connection failure.
 	mr.Close()
@@ -505,7 +505,7 @@ func TestRedisAllow_FailsOnClosedConnection(t *testing.T) {
 // --- Cancelled Context ---
 
 func TestRedisAllow_CancelledContext(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 10, time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
@@ -520,8 +520,8 @@ func TestRedisAllow_CancelledContext(t *testing.T) {
 
 // --- Store Interface Compliance ---
 
-func TestRedisStore_ImplementsStoreInterface(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+func TestRedisTokenBucket_ImplementsStoreInterface(t *testing.T) {
+	store, _ := newTestRedisTokenBucket(t, 10, time.Second)
 
 	// Compile-time check: RedisStore must satisfy the Store interface.
 	var _ Store = store
@@ -530,7 +530,7 @@ func TestRedisStore_ImplementsStoreInterface(t *testing.T) {
 // --- Refill Restores Full Bucket ---
 
 func TestRedisAllow_FullRefillRestoresBucket(t *testing.T) {
-	store, mr := newTestRedisStore(t)
+	store, mr := newTestRedisTokenBucket(t, 10, time.Second)
 	ctx := context.Background()
 
 	now := time.Now()
@@ -558,7 +558,7 @@ func TestRedisAllow_FullRefillRestoresBucket(t *testing.T) {
 // --- Retry After Accuracy ---
 
 func TestRedisAllow_RetryAfterAccuracy(t *testing.T) {
-	store, _ := newTestRedisStore(t)
+	store, _ := newTestRedisTokenBucket(t, 10, time.Second)
 	ctx := context.Background()
 
 	// Use 8 of 10 tokens, then request cost=5 (need 3 more).
@@ -582,7 +582,7 @@ func TestRedisAllow_RetryAfterAccuracy(t *testing.T) {
 // --- Bucket Recreation After Expiry ---
 
 func TestRedisAllow_BucketRecreatedAfterTTLExpiry(t *testing.T) {
-	store, mr := newTestRedisStore(t)
+	store, mr := newTestRedisTokenBucket(t, 5, time.Second)
 	ctx := context.Background()
 
 	now := time.Now()
