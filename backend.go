@@ -13,14 +13,13 @@ type Backend interface {
 	// Parameters:
 	// - ctx: The context for the request.
 	// - key: A unique identifier for the rate limit bucket.
-	// - cost: The number of tokens the current request consumes.
-	// - maxToken: The maximum number of tokens the bucket can hold.
-	// - refillInterval: The time duration required to refill tokens.
+	// - n: The number of tokens the current request consumes.
+
 	//
 	// Returns:
-	// - *Result: Contains Allow (bool), Remaining (int64), and RetryAfter (time.Duration).
+	// - Result: Contains Allow (bool), Remaining (int64), and RetryAfter (time.Duration).
 	// - error: Any error that occurred during the check.
-	Allow(ctx context.Context, key string, cost, maxToken int64, refillInterval time.Duration) (*Result, error)
+	AllowN(ctx context.Context, key string, n int64) (Result, error)
 }
 
 // Result represents the result of a rate limit check.

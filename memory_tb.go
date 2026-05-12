@@ -16,19 +16,29 @@ type bucket struct {
 
 // memoryTokenBucket is an in-memory implementation of the Backend interface.
 type memoryTokenBucket struct {
-	mu sync.Mutex
+	mu             sync.Mutex
+	rate           int64
+	maxToken       int64
+	refillInterval time.Duration
+
+	tokenInterval time.Duration
 
 	buckets     map[string]*bucket
 	stalePeriod time.Duration
 }
 
 // NewMemoryTokenBucket creates a new instance of memoryTokenBucket and starts a janitor goroutine.
-func NewMemoryTokenBucket() Backend {
+func NewMemoryTokenBucket(rate int64, maxTokens int64, refillInterval time.Duration) Backend {
 
 	m := &memoryTokenBucket{
-		buckets:     make(map[string]*bucket),
-		stalePeriod: defaultStalePeriod,
+		rate:           rate,
+		maxToken:       maxTokens,
+		refillInterval: refillInterval,
+		buckets:        make(map[string]*bucket),
+		stalePeriod:    defaultStalePeriod,
 	}
+
+	m.tokenInterval = refillInterval / time.Duration(rate)
 
 	// Start the background goroutine to clean up unused buckets
 	go m.janitor()
@@ -37,7 +47,7 @@ func NewMemoryTokenBucket() Backend {
 }
 
 // Allow checks if a request is permitted for the given key using a token bucket algorithm.
-func (m *memoryTokenBucket) Allow(ctx context.Context, key string, cost, maxToken int64, refillInterval time.Duration) (*Result, error) {
+func (m *memoryTokenBucket) AllowN(ctx context.Context, key string, n int64) (Result, error) {
 	// Lock the store to ensure thread-safety for map access and bucket updates.
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -48,7 +58,7 @@ func (m *memoryTokenBucket) Allow(ctx context.Context, key string, cost, maxToke
 	b, ok := m.buckets[key]
 	if !ok {
 		b = &bucket{
-			tokens:     maxToken,
+			tokens:     m.maxToken,
 			lastRefill: now,
 		}
 		m.buckets[key] = b
@@ -56,40 +66,39 @@ func (m *memoryTokenBucket) Allow(ctx context.Context, key string, cost, maxToke
 
 	// Calculate tokens to add based on the time elapsed since the last refill.
 	elapsed := now.Sub(b.lastRefill)
-	tokensToAdd := int64(elapsed / refillInterval)
+	tokensToAdd := int64(elapsed / m.tokenInterval)
 
 	if tokensToAdd > 0 {
 		b.tokens += tokensToAdd
 
 		// Cap the tokens at maxToken.
-		if b.tokens > maxToken {
-			b.tokens = maxToken
+		if b.tokens > m.maxToken {
+			b.tokens = m.maxToken
 		}
 
 		// Update the lastRefill time by adding the exact duration of added tokens.
 		// This prevents "drift" and ensures precise refill timing.
-		b.lastRefill = b.lastRefill.Add(time.Duration(tokensToAdd) * refillInterval)
+		b.lastRefill = b.lastRefill.Add(time.Duration(tokensToAdd) * m.tokenInterval)
 	}
+
+	var res Result
 
 	// Check if the bucket has enough tokens for the requested cost.
-	if b.tokens >= cost {
-		b.tokens -= cost
-		return &Result{
-			Allow:      true,
-			Remaining:  b.tokens,
-			RetryAfter: 0,
-		}, nil
+	if b.tokens >= n {
+		b.tokens -= n
+
+		res.Allow = true
+		res.Remaining = b.tokens
+		res.RetryAfter = 0
+		return res, nil
 	}
 
-	// If not enough tokens, calculate the duration until enough tokens are refilled.
-	needed := cost - b.tokens
-	retryAfter := time.Duration(needed) * refillInterval
+	needed := n - b.tokens
+	retryAfter := time.Duration(needed) * m.tokenInterval
 
-	res := &Result{
-		Allow:      false,
-		Remaining:  b.tokens,
-		RetryAfter: retryAfter,
-	}
+	res.Allow = false
+	res.Remaining = b.tokens
+	res.RetryAfter = retryAfter
 
 	return res, nil
 }

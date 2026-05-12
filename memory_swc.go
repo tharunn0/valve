@@ -35,10 +35,10 @@ func NewMemorySlidingWindowCounter() Backend {
 	return m
 }
 
-// Allow checks if a request is permitted for the given key using a sliding window counter algorithm.
-func (m *memorySlidingWindowCounter) Allow(ctx context.Context, key string, cost, maxToken int64, refillInterval time.Duration) (*Result, error) {
+// AllowN checks if a request is permitted for the given key using a sliding window counter algorithm.
+func (m *memorySlidingWindowCounter) AllowN(ctx context.Context, key string, n int64) (Result, error) {
 	// TODO: implement sliding window counter logic
-	return &Result{}, nil
+	return Result{}, nil
 }
 
 // janitor runs in a background goroutine to periodically clean up stale windows.

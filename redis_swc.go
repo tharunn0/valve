@@ -34,7 +34,7 @@ func NewRedisSlidingWindowCounter(client *redis.Client, maxTokens uint32, refill
 }
 
 // Allow checks if a request is allowed based on the sliding window counter rate limit.
-func (r *redisSlidingWindowCounter) Allow(ctx context.Context, key string, cost, maxToken int64, refillInterval time.Duration) (*Result, error) {
+func (r *redisSlidingWindowCounter) AllowN(ctx context.Context, key string, n int64) (Result, error) {
 	// TODO: implement sliding window counter logic with Lua script execution
-	return &Result{}, nil
+	return Result{}, nil
 }

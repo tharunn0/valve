@@ -89,15 +89,15 @@ return {
 // It utilizes Lua scripts to guarantee atomicity of rate limit evaluations.
 type redisTokenBucket struct {
 	client         *redis.Client
-	rate           uint32
-	maxTokens      uint32
+	rate           int64
+	maxTokens      int64
 	refillInterval time.Duration
 	script         *redis.Script
 }
 
 // NewRedisTokenBucket creates a new redisTokenBucket with the given Redis client.
 // It initializes the Lua script that will be used for atomic rate limit operations.
-func NewRedisTokenBucket(client *redis.Client, rate uint32, maxTokens uint32, refillInterval time.Duration) Backend {
+func NewRedisTokenBucket(client *redis.Client, rate int64, maxTokens int64, refillInterval time.Duration) Backend {
 	return &redisTokenBucket{
 		client:         client,
 		rate:           rate,
@@ -107,19 +107,19 @@ func NewRedisTokenBucket(client *redis.Client, rate uint32, maxTokens uint32, re
 	}
 }
 
-// Allow checks if a request is allowed based on the rate limit.
+// AllowN checks if a request is allowed based on the rate limit.
 // It executes the rate limit Lua script on the Redis server to atomically deduct the cost
 // and return the current state of the bucket.
-func (r *redisTokenBucket) Allow(ctx context.Context, key string, cost, maxToken int64, refillInterval time.Duration) (*Result, error) {
+func (r *redisTokenBucket) AllowN(ctx context.Context, key string, n int64) (Result, error) {
 	keys := []string{key}
 
 	args := []any{
-		cost,
+		n,
 		r.maxTokens,
 		r.refillInterval.Milliseconds(),
 	}
 
-	res := &Result{}
+	res := Result{}
 
 	// Execute the pre-loaded Lua script.
 	result, err := r.script.Run(ctx, r.client, keys, args...).Result()
