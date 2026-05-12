@@ -106,8 +106,8 @@ func NewRedisStore(client *redis.Client) Store {
 // and return the current state of the bucket.
 func (r *redisStore) Allow(ctx context.Context, key string, cost, maxToken int64, refillInterval time.Duration) (allow bool, remaining int64, retryAfter time.Duration, err error) {
 	keys := []string{key}
-	
-	args := []interface{}{
+
+	args := []any{
 		cost,
 		maxToken,
 		refillInterval.Milliseconds(),
@@ -120,7 +120,7 @@ func (r *redisStore) Allow(ctx context.Context, key string, cost, maxToken int64
 	}
 
 	// Parse the results from the Lua script and extract the values.
-	res, ok := result.([]interface{})
+	res, ok := result.([]any)
 	if !ok || len(res) < 3 {
 		return false, 0, 0, fmt.Errorf("unexpected lua script result format")
 	}
