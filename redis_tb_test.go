@@ -11,8 +11,8 @@ import (
 )
 
 // newTestRedisTokenBucket spins up a fresh miniredis instance and returns
-// the RedisTokenBucket alongside the miniredis server for time manipulation.
-func newTestRedisTokenBucket(t *testing.T, maxTokens uint32, refillInterval time.Duration) (*redisTokenBucket, *miniredis.Miniredis) {
+// the redisTokenBucket alongside the miniredis server for time manipulation.
+func newTestRedisTokenBucket(t *testing.T, rate int64, maxTokens int64, refillInterval time.Duration) (*redisTokenBucket, *miniredis.Miniredis) {
 	t.Helper()
 
 	mr := miniredis.RunT(t) // auto-closed when t finishes
@@ -21,7 +21,7 @@ func newTestRedisTokenBucket(t *testing.T, maxTokens uint32, refillInterval time
 		Addr: mr.Addr(),
 	})
 
-	backendI := NewRedisTokenBucket(client, maxTokens, maxTokens, refillInterval)
+	backendI := NewRedisTokenBucket(client, rate, maxTokens, refillInterval)
 
 	backend := backendI.(*redisTokenBucket)
 
@@ -31,7 +31,7 @@ func newTestRedisTokenBucket(t *testing.T, maxTokens uint32, refillInterval time
 // --- Constructor ---
 
 func TestNewRedisTokenBucket_ReturnsNonNil(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 10, time.Second)
+	backend, _ := newTestRedisTokenBucket(t, 10, 10, time.Second)
 
 	if backend == nil {
 		t.Fatal("expected non-nil RedisTokenBucket")
@@ -47,9 +47,9 @@ func TestNewRedisTokenBucket_ReturnsNonNil(t *testing.T) {
 // --- Basic Allow Behavior ---
 
 func TestRedisAllow_FirstRequestAllowed(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 10, time.Second)
+	backend, _ := newTestRedisTokenBucket(t, 10, 10, time.Second)
 
-	res, err := backend.Allow(context.Background(), "key1", 1, 10, time.Second)
+	res, err := backend.AllowN(context.Background(), "key1", 1)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -66,12 +66,12 @@ func TestRedisAllow_FirstRequestAllowed(t *testing.T) {
 }
 
 func TestRedisAllow_ExhaustAllTokens(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 5, time.Second)
+	backend, _ := newTestRedisTokenBucket(t, 5, 5, time.Second)
 	ctx := context.Background()
 
 	// Consume all 5 tokens one by one.
 	for i := range 5 {
-		res, err := backend.Allow(ctx, "key1", 1, 5, time.Second)
+		res, err := backend.AllowN(ctx, "key1", 1)
 		if err != nil {
 			t.Fatalf("request %d: unexpected error: %v", i, err)
 		}
@@ -85,7 +85,7 @@ func TestRedisAllow_ExhaustAllTokens(t *testing.T) {
 	}
 
 	// The 6th request should be denied.
-	res, err := backend.Allow(ctx, "key1", 1, 5, time.Second)
+	res, err := backend.AllowN(ctx, "key1", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -101,11 +101,11 @@ func TestRedisAllow_ExhaustAllTokens(t *testing.T) {
 }
 
 func TestRedisAllow_CostGreaterThanOne(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 10, time.Second)
+	backend, _ := newTestRedisTokenBucket(t, 10, 10, time.Second)
 	ctx := context.Background()
 
 	// Request with cost 3 from a bucket of 10.
-	res, err := backend.Allow(ctx, "key1", 3, 10, time.Second)
+	res, err := backend.AllowN(ctx, "key1", 3)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -118,14 +118,14 @@ func TestRedisAllow_CostGreaterThanOne(t *testing.T) {
 }
 
 func TestRedisAllow_CostExceedsAvailableTokens(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 10, time.Second)
+	backend, _ := newTestRedisTokenBucket(t, 10, 10, time.Second)
 	ctx := context.Background()
 
 	// Consume 8 of 10 tokens.
-	backend.Allow(ctx, "key1", 8, 10, time.Second)
+	backend.AllowN(ctx, "key1", 8)
 
 	// Now request cost=5, but only 2 remain.
-	res, err := backend.Allow(ctx, "key1", 5, 10, time.Second)
+	res, err := backend.AllowN(ctx, "key1", 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -141,11 +141,11 @@ func TestRedisAllow_CostExceedsAvailableTokens(t *testing.T) {
 }
 
 func TestRedisAllow_CostEqualToMaxTokens(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 10, time.Second)
+	backend, _ := newTestRedisTokenBucket(t, 10, 10, time.Second)
 	ctx := context.Background()
 
 	// A single request that costs exactly the full bucket.
-	res, err := backend.Allow(ctx, "key1", 10, 10, time.Second)
+	res, err := backend.AllowN(ctx, "key1", 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -157,18 +157,18 @@ func TestRedisAllow_CostEqualToMaxTokens(t *testing.T) {
 	}
 
 	// Next request should be denied.
-	res, _ = backend.Allow(ctx, "key1", 1, 10, time.Second)
+	res, _ = backend.AllowN(ctx, "key1", 1)
 	if res.Allow {
 		t.Fatal("expected request to be denied after full depletion")
 	}
 }
 
 func TestRedisAllow_CostExceedsMaxTokens(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 10, time.Second)
+	backend, _ := newTestRedisTokenBucket(t, 10, 10, time.Second)
 	ctx := context.Background()
 
 	// A request whose cost is larger than the bucket can ever hold.
-	res, err := backend.Allow(ctx, "key1", 15, 10, time.Second)
+	res, err := backend.AllowN(ctx, "key1", 15)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestRedisAllow_CostExceedsMaxTokens(t *testing.T) {
 // --- Token Refill Behavior ---
 
 func TestRedisAllow_TokenRefillAfterWait(t *testing.T) {
-	backend, mr := newTestRedisTokenBucket(t, 5, time.Second)
+	backend, mr := newTestRedisTokenBucket(t, 5, 5, time.Second)
 	ctx := context.Background()
 
 	// Pin the start time so TIME calls in the Lua script are deterministic.
@@ -194,14 +194,14 @@ func TestRedisAllow_TokenRefillAfterWait(t *testing.T) {
 	mr.SetTime(now)
 
 	// Exhaust all tokens.
-	backend.Allow(ctx, "key1", 5, 5, time.Second)
+	backend.AllowN(ctx, "key1", 5)
 
 	// Advance the mocked TIME by 600ms to simulate partial refill.
 	// With capacity=5 and refillInterval=1s, rate = 5 tokens/s.
 	// After 600ms: 0.6s * 5 = 3 tokens refilled.
 	mr.SetTime(now.Add(600 * time.Millisecond))
 
-	res, err := backend.Allow(ctx, "key1", 2, 5, time.Second)
+	res, err := backend.AllowN(ctx, "key1", 2)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -214,20 +214,20 @@ func TestRedisAllow_TokenRefillAfterWait(t *testing.T) {
 }
 
 func TestRedisAllow_RefillCapsAtMaxTokens(t *testing.T) {
-	backend, mr := newTestRedisTokenBucket(t, 5, time.Second)
+	backend, mr := newTestRedisTokenBucket(t, 5, 5, time.Second)
 	ctx := context.Background()
 
 	now := time.Now()
 	mr.SetTime(now)
 
 	// Use 2 of 5 tokens.
-	backend.Allow(ctx, "key1", 2, 5, time.Second)
+	backend.AllowN(ctx, "key1", 2)
 
 	// Advance TIME by 5 seconds, far longer than the full refill interval.
 	// Tokens should cap at 5, not exceed it.
 	mr.SetTime(now.Add(5 * time.Second))
 
-	res, err := backend.Allow(ctx, "key1", 1, 5, time.Second)
+	res, err := backend.AllowN(ctx, "key1", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestRedisAllow_RefillCapsAtMaxTokens(t *testing.T) {
 }
 
 func TestRedisAllow_PartialRefillNotEnough(t *testing.T) {
-	backend, mr := newTestRedisTokenBucket(t, 5, 10*time.Second)
+	backend, mr := newTestRedisTokenBucket(t, 5, 5, 10*time.Second)
 	ctx := context.Background()
 
 	now := time.Now()
@@ -249,12 +249,12 @@ func TestRedisAllow_PartialRefillNotEnough(t *testing.T) {
 
 	// Exhaust all tokens (capacity=5, refillInterval=10s).
 	// rate = 5/10s = 0.5 tokens/s.
-	backend.Allow(ctx, "key1", 5, 5, 10*time.Second)
+	backend.AllowN(ctx, "key1", 5)
 
 	// Advance TIME by 1s => only 0.5 tokens refilled, which is < 1 cost.
 	mr.SetTime(now.Add(1 * time.Second))
 
-	res, err := backend.Allow(ctx, "key1", 1, 5, 10*time.Second)
+	res, err := backend.AllowN(ctx, "key1", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -269,14 +269,14 @@ func TestRedisAllow_PartialRefillNotEnough(t *testing.T) {
 // --- Key Isolation ---
 
 func TestRedisAllow_DifferentKeysAreIsolated(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 5, time.Second)
+	backend, _ := newTestRedisTokenBucket(t, 5, 5, time.Second)
 	ctx := context.Background()
 
 	// Exhaust key1.
-	backend.Allow(ctx, "key1", 5, 5, time.Second)
+	backend.AllowN(ctx, "key1", 5)
 
 	// key2 should be unaffected.
-	res, err := backend.Allow(ctx, "key2", 1, 5, time.Second)
+	res, err := backend.AllowN(ctx, "key2", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -289,13 +289,13 @@ func TestRedisAllow_DifferentKeysAreIsolated(t *testing.T) {
 }
 
 func TestRedisAllow_ManyKeysIndependent(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 3, time.Second)
+	backend, _ := newTestRedisTokenBucket(t, 3, 3, time.Second)
 	ctx := context.Background()
 
 	keys := []string{"user:alpha", "user:bravo", "user:charlie"}
 
 	for _, key := range keys {
-		res, err := backend.Allow(ctx, key, 1, 3, time.Second)
+		res, err := backend.AllowN(ctx, key, 1)
 		if err != nil {
 			t.Fatalf("key %s: unexpected error: %v", key, err)
 		}
@@ -311,7 +311,7 @@ func TestRedisAllow_ManyKeysIndependent(t *testing.T) {
 // --- Concurrency ---
 
 func TestRedisAllow_ConcurrentAccess(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 50, time.Hour)
+	backend, _ := newTestRedisTokenBucket(t, 50, 50, time.Hour)
 	ctx := context.Background()
 
 	var (
@@ -330,7 +330,7 @@ func TestRedisAllow_ConcurrentAccess(t *testing.T) {
 	for range goroutines {
 		go func() {
 			defer wg.Done()
-			res, err := backend.Allow(ctx, "concurrent-key", 1, maxTokens, time.Hour)
+			res, err := backend.AllowN(ctx, "concurrent-key", 1)
 			if err != nil {
 				t.Errorf("unexpected error: %v", err)
 				return
@@ -358,13 +358,12 @@ func TestRedisAllow_ConcurrentAccess(t *testing.T) {
 }
 
 func TestRedisAllow_ConcurrentDifferentKeys(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 10, time.Hour)
+	backend, _ := newTestRedisTokenBucket(t, 10, 10, time.Hour)
 	ctx := context.Background()
 
 	var wg sync.WaitGroup
 	keys := []string{"user:1", "user:2", "user:3", "user:4", "user:5"}
 	requestsPerKey := 10
-	maxTokens := int64(10)
 
 	wg.Add(len(keys) * requestsPerKey)
 
@@ -373,7 +372,7 @@ func TestRedisAllow_ConcurrentDifferentKeys(t *testing.T) {
 		for range requestsPerKey {
 			go func(k string) {
 				defer wg.Done()
-				_, err := backend.Allow(ctx, k, 1, maxTokens, time.Hour)
+				_, err := backend.AllowN(ctx, k, 1)
 				if err != nil {
 					t.Errorf("unexpected error for key %s: %v", k, err)
 				}
@@ -385,7 +384,7 @@ func TestRedisAllow_ConcurrentDifferentKeys(t *testing.T) {
 
 	// All requests should have been allowed since each key has exactly 10 tokens.
 	for _, key := range keys {
-		res, _ := backend.Allow(ctx, key, 1, maxTokens, time.Hour)
+		res, _ := backend.AllowN(ctx, key, 1)
 		// After consuming 10 tokens, a new request should be denied.
 		if res.Allow {
 			t.Fatalf("expected key %s to be exhausted, but got allowed with %d remaining", key, res.Remaining)
@@ -396,10 +395,10 @@ func TestRedisAllow_ConcurrentDifferentKeys(t *testing.T) {
 // --- Edge Cases ---
 
 func TestRedisAllow_ZeroCost(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 10, time.Second)
+	backend, _ := newTestRedisTokenBucket(t, 10, 10, time.Second)
 	ctx := context.Background()
 
-	res, err := backend.Allow(ctx, "key1", 0, 10, time.Second)
+	res, err := backend.AllowN(ctx, "key1", 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -415,11 +414,11 @@ func TestRedisAllow_ZeroCost(t *testing.T) {
 }
 
 func TestRedisAllow_MaxTokenOfOne(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 1, time.Second)
+	backend, _ := newTestRedisTokenBucket(t, 1, 1, time.Second)
 	ctx := context.Background()
 
 	// First request allowed.
-	res, _ := backend.Allow(ctx, "key1", 1, 1, time.Second)
+	res, _ := backend.AllowN(ctx, "key1", 1)
 	if !res.Allow {
 		t.Fatal("expected first request to be allowed")
 	}
@@ -428,7 +427,7 @@ func TestRedisAllow_MaxTokenOfOne(t *testing.T) {
 	}
 
 	// Second request denied immediately.
-	res, _ = backend.Allow(ctx, "key1", 1, 1, time.Second)
+	res, _ = backend.AllowN(ctx, "key1", 1)
 	if res.Allow {
 		t.Fatal("expected second request to be denied")
 	}
@@ -438,14 +437,14 @@ func TestRedisAllow_MaxTokenOfOne(t *testing.T) {
 }
 
 func TestRedisAllow_MultipleRapidRequests(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 100, time.Hour)
+	backend, _ := newTestRedisTokenBucket(t, 100, 100, time.Hour)
 	ctx := context.Background()
 
 	// Use a very large refillInterval so miniredis TIME differences between
 	// sequential calls don't cause fractional token refills.
 	var lastRemaining int64
 	for i := range 100 {
-		res, err := backend.Allow(ctx, "burst", 1, 100, time.Hour)
+		res, err := backend.AllowN(ctx, "burst", 1)
 		if err != nil {
 			t.Fatalf("request %d: unexpected error: %v", i, err)
 		}
@@ -460,20 +459,20 @@ func TestRedisAllow_MultipleRapidRequests(t *testing.T) {
 	}
 
 	// 101st should be denied.
-	res, _ := backend.Allow(ctx, "burst", 1, 100, time.Hour)
+	res, _ := backend.AllowN(ctx, "burst", 1)
 	if res.Allow {
 		t.Fatal("expected 101st request to be denied")
 	}
 }
 
 func TestRedisAllow_LargeRefillInterval(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 5, time.Hour)
+	backend, _ := newTestRedisTokenBucket(t, 5, 5, time.Hour)
 	ctx := context.Background()
 
 	// Use all tokens with a very long refill.
-	backend.Allow(ctx, "key1", 5, 5, time.Hour)
+	backend.AllowN(ctx, "key1", 5)
 
-	res, _ := backend.Allow(ctx, "key1", 1, 5, time.Hour)
+	res, _ := backend.AllowN(ctx, "key1", 1)
 	if res.Allow {
 		t.Fatal("expected denied with hour-long refill")
 	}
@@ -496,7 +495,7 @@ func TestRedisAllow_FailsOnClosedConnection(t *testing.T) {
 	// Close the miniredis server to simulate a connection failure.
 	mr.Close()
 
-	_, err := backend.Allow(context.Background(), "key1", 1, 10, time.Second)
+	_, err := backend.AllowN(context.Background(), "key1", 1)
 	if err == nil {
 		t.Fatal("expected error when Redis connection is closed")
 	}
@@ -505,12 +504,12 @@ func TestRedisAllow_FailsOnClosedConnection(t *testing.T) {
 // --- Cancelled Context ---
 
 func TestRedisAllow_CancelledContext(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 10, time.Second)
+	backend, _ := newTestRedisTokenBucket(t, 10, 10, time.Second)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	_, err := backend.Allow(ctx, "key1", 1, 10, time.Second)
+	_, err := backend.AllowN(ctx, "key1", 1)
 
 	// With a cancelled context, the Redis call should return an error.
 	if err == nil {
@@ -521,7 +520,7 @@ func TestRedisAllow_CancelledContext(t *testing.T) {
 // --- Backend Interface Compliance ---
 
 func TestRedisTokenBucket_ImplementsBackendInterface(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 10, time.Second)
+	backend, _ := newTestRedisTokenBucket(t, 10, 10, time.Second)
 
 	// Compile-time check: redisTokenBucket must satisfy the Backend interface.
 	var _ Backend = backend
@@ -530,20 +529,20 @@ func TestRedisTokenBucket_ImplementsBackendInterface(t *testing.T) {
 // --- Refill Restores Full Bucket ---
 
 func TestRedisAllow_FullRefillRestoresBucket(t *testing.T) {
-	backend, mr := newTestRedisTokenBucket(t, 10, time.Second)
+	backend, mr := newTestRedisTokenBucket(t, 10, 10, time.Second)
 	ctx := context.Background()
 
 	now := time.Now()
 	mr.SetTime(now)
 
 	// Exhaust all tokens.
-	backend.Allow(ctx, "key1", 10, 10, time.Second)
+	backend.AllowN(ctx, "key1", 10)
 
 	// Advance TIME by the full refill interval.
 	mr.SetTime(now.Add(1 * time.Second))
 
 	// Bucket should be fully restored (capped at capacity).
-	res, err := backend.Allow(ctx, "key1", 1, 10, time.Second)
+	res, err := backend.AllowN(ctx, "key1", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -558,13 +557,13 @@ func TestRedisAllow_FullRefillRestoresBucket(t *testing.T) {
 // --- Retry After Accuracy ---
 
 func TestRedisAllow_RetryAfterAccuracy(t *testing.T) {
-	backend, _ := newTestRedisTokenBucket(t, 10, time.Second)
+	backend, _ := newTestRedisTokenBucket(t, 10, 10, time.Second)
 	ctx := context.Background()
 
 	// Use 8 of 10 tokens, then request cost=5 (need 3 more).
-	backend.Allow(ctx, "key1", 8, 10, time.Second)
+	backend.AllowN(ctx, "key1", 8)
 
-	res, err := backend.Allow(ctx, "key1", 5, 10, time.Second)
+	res, err := backend.AllowN(ctx, "key1", 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -582,21 +581,21 @@ func TestRedisAllow_RetryAfterAccuracy(t *testing.T) {
 // --- Bucket Recreation After Expiry ---
 
 func TestRedisAllow_BucketRecreatedAfterTTLExpiry(t *testing.T) {
-	backend, mr := newTestRedisTokenBucket(t, 5, time.Second)
+	backend, mr := newTestRedisTokenBucket(t, 5, 5, time.Second)
 	ctx := context.Background()
 
 	now := time.Now()
 	mr.SetTime(now)
 
 	// Create and exhaust a bucket.
-	backend.Allow(ctx, "key1", 5, 5, time.Second)
+	backend.AllowN(ctx, "key1", 5)
 
 	// Advance TIME and TTL past the key expiry (TTL = 2 * refillInterval = 2s).
 	mr.SetTime(now.Add(3 * time.Second))
 	mr.FastForward(3 * time.Second)
 
 	// A new request should create a fresh bucket with full tokens.
-	res, err := backend.Allow(ctx, "key1", 1, 5, time.Second)
+	res, err := backend.AllowN(ctx, "key1", 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

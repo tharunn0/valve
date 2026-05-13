@@ -7,7 +7,7 @@ import (
 )
 
 func TestNewLimiter(t *testing.T) {
-	backend := NewMemoryTokenBucket()
+	backend := NewMemoryTokenBucket(5, 10, time.Second)
 
 	tests := []struct {
 		name    string
@@ -18,40 +18,13 @@ func TestNewLimiter(t *testing.T) {
 			name: "valid options",
 			opts: []Option{
 				WithBackend(backend),
-				WithRate(5),
-				WithMaxTokens(10),
-				WithRefillInterval(time.Second),
 			},
 			wantErr: nil,
 		},
 		{
 			name:    "missing backend",
-			opts:    []Option{WithRate(5)},
+			opts:    []Option{},
 			wantErr: ErrBackendRequired,
-		},
-		{
-			name:    "invalid rate",
-			opts:    []Option{WithBackend(backend), WithRate(0)},
-			wantErr: ErrInvalidRate,
-		},
-		{
-			name:    "invalid max tokens",
-			opts:    []Option{WithBackend(backend), WithMaxTokens(-1)},
-			wantErr: ErrInvalidMaxTokens,
-		},
-		{
-			name:    "invalid refill interval",
-			opts:    []Option{WithBackend(backend), WithRefillInterval(0)},
-			wantErr: ErrInvalidRefillInterval,
-		},
-		{
-			name: "rate too high",
-			opts: []Option{
-				WithBackend(backend),
-				WithRate(2),
-				WithRefillInterval(1 * time.Nanosecond),
-			},
-			wantErr: ErrRateTooHigh,
 		},
 	}
 
@@ -66,36 +39,37 @@ func TestNewLimiter(t *testing.T) {
 }
 
 func TestLimiter_Allow(t *testing.T) {
-	backend := NewMemoryTokenBucket()
-	limiter, _ := NewLimiter(
+	// 5 tokens per second => 200ms per token, max 10 tokens
+	backend := NewMemoryTokenBucket(5, 10, time.Second)
+	limiter, err := NewLimiter(
 		WithBackend(backend),
-		WithRate(5), // 5 tokens per second => 200ms per token
-		WithMaxTokens(10),
-		WithRefillInterval(time.Second),
 	)
+	if err != nil {
+		t.Fatalf("unexpected error creating limiter: %v", err)
+	}
 
 	ctx := context.Background()
 	key := "test-key"
 
-	// Initial burst
+	// Initial burst — consume all 10 tokens
 	for i := 0; i < 10; i++ {
-		allow, remaining, retryAfter, err := limiter.Allow(key)
+		res, err := limiter.Allow(ctx, key)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !allow {
+		if !res.Allow {
 			t.Fatalf("request %d should be allowed", i)
 		}
-		if remaining != int64(9-i) {
-			t.Fatalf("expected remaining %d, got %d", 9-i, remaining)
+		if res.Remaining != int64(9-i) {
+			t.Fatalf("expected remaining %d, got %d", 9-i, res.Remaining)
 		}
-		if retryAfter != 0 {
-			t.Fatalf("expected retryAfter 0, got %v", retryAfter)
+		if res.RetryAfter != 0 {
+			t.Fatalf("expected retryAfter 0, got %v", res.RetryAfter)
 		}
 	}
 
 	// 11th request should be denied
-	res, err := limiter.AllowContext(ctx, key, 1)
+	res, err := limiter.AllowN(ctx, key, 1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
